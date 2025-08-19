@@ -10,6 +10,8 @@ A Go CLI tool for generating Merkle trees, roots, and proofs for bytes32 leaves.
 - Hash arbitrary data to bytes32
 - CLI interface for easy integration
 - Compatible with Solidity MerkleTree implementation
+- Tools for interacting with TokenClaimer contracts
+- Transaction signing and proof generation utilities
 
 ## Installation
 
@@ -266,7 +268,29 @@ function leaf(address _addr, uint256 _amount) public pure returns (bytes32) {
 // Result: 0x862d9f69cd1642f07c56ec6b92856ce141af9dfe404d2ab0c4685a334945ffe6
 ```
 
+## Tools Directory
+
+The `tools/` directory contains specialized utilities for interacting with TokenClaimer contracts:
+
+### Claim Tool
+
+Send claim transactions to TokenClaimer contracts:
+
+```bash
+# Basic claim
+go run tools/claim.go -config examples/config.yml
+
+# Dry run (prepare transaction but don't send)
+go run tools/claim.go -config examples/config.yml -dry-run
+
+# Claim for specific address/amount
+go run tools/claim.go -config examples/config.yml -address 0x... -amount 1000
+```
+
+See `tools/README.md` for detailed documentation and configuration instructions.
+
 ## Dependencies
 
 - `github.com/ethereum/go-ethereum` - For common.Hash types and Keccak256 hashing
 - `github.com/spf13/cobra` - For CLI interface
+- `gopkg.in/yaml.v3` - For configuration file parsing
