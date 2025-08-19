@@ -1,287 +1,104 @@
+// Package main provides an example of testing TokenClaimer contract read functions via RPC
+//
+// This example demonstrates:
+// 1. Connecting to an Ethereum node via RPC
+// 2. Testing contract's generateMerkleRoot function
+// 3. Testing contract's generateProof function
+// 4. Testing contract's verifyAddress function
+//
+// For claim functionality (sending transactions), use the separate tools/claim.go
+//
+// To run this example:
+// 1. Copy examples/config.yml.example to examples/config.yml
+// 2. Update config.yml with your RPC endpoint and contract address
+// 3. Uncomment the main function at the bottom of this file
+// 4. Run: go run examples/rpc_contract_tester.go
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
-	"math/big"
-	"os"
-	"strings"
 
 	"merkle-generator/merkle"
+	"merkle-generator/util"
 
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
-	"gopkg.in/yaml.v3"
 )
 
-// TokenClaimer ABI - includes all functions we need
-const TokenClaimerABI = `[
-	{
-		"inputs": [
-			{
-				"internalType": "bytes32[]",
-				"name": "_proof",
-				"type": "bytes32[]"
-			},
-			{
-				"internalType": "bytes32",
-				"name": "_root",
-				"type": "bytes32"
-			},
-			{
-				"internalType": "address",
-				"name": "_addr",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_amount",
-				"type": "uint256"
-			}
-		],
-		"name": "verifyAddress",
-		"outputs": [
-			{
-				"internalType": "bool",
-				"name": "",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "pure",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address[]",
-				"name": "_addresses",
-				"type": "address[]"
-			},
-			{
-				"internalType": "uint256[]",
-				"name": "_amounts",
-				"type": "uint256[]"
-			}
-		],
-		"name": "generateMerkleRoot",
-		"outputs": [
-			{
-				"internalType": "bytes32",
-				"name": "",
-				"type": "bytes32"
-			}
-		],
-		"stateMutability": "pure",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address[]",
-				"name": "_addresses",
-				"type": "address[]"
-			},
-			{
-				"internalType": "uint256[]",
-				"name": "_amounts",
-				"type": "uint256[]"
-			},
-			{
-				"internalType": "address",
-				"name": "_target",
-				"type": "address"
-			}
-		],
-		"name": "generateProof",
-		"outputs": [
-			{
-				"internalType": "bytes32[]",
-				"name": "",
-				"type": "bytes32[]"
-			}
-		],
-		"stateMutability": "pure",
-		"type": "function"
-	}
-]`
-
-// Configuration structs
-type Config struct {
-	RPC      RPCConfig      `yaml:"rpc"`
-	TestData TestDataConfig `yaml:"test_data"`
-}
-
-type RPCConfig struct {
-	Endpoint        string `yaml:"endpoint"`
-	ContractAddress string `yaml:"contract_address"`
-	PrivateKey      string `yaml:"private_key"`
-}
-
-type TestDataConfig struct {
-	Addresses []string `yaml:"addresses"`
-	Amounts   []string `yaml:"amounts"`
-}
-
-// Test data structure
-type TestCase struct {
-	Name    string
-	Address common.Address
-	Amount  *big.Int
-}
-
-func main() {
+func runContractTester() {
 	fmt.Println("=== TokenClaimer Contract RPC Test (with config) ===")
 
 	// Load configuration
-	config, err := loadConfig("examples/config.yml")
+	config, err := util.LoadConfig("examples/config.yml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
 	// Validate configuration
-	if config.RPC.Endpoint == "" || config.RPC.ContractAddress == "" {
-		fmt.Println("⚠️  Please update config.yml with your settings:")
+	if err := config.ValidateConfig(); err != nil {
+		fmt.Printf("⚠️  Configuration error: %v\n", err)
+		fmt.Println("   Please update config.yml with your settings:")
 		fmt.Println("   - rpc.endpoint: Your Ethereum RPC URL")
 		fmt.Println("   - rpc.contract_address: Your TokenClaimer contract address")
-		fmt.Println("   - Optionally set rpc.private_key for transactions")
 		return
 	}
 
 	// Convert config to test cases
-	testCases, err := configToTestCases(config)
+	testCases, err := config.ToTestCases()
 	if err != nil {
 		log.Fatalf("Failed to convert config to test cases: %v", err)
 	}
 
 	// Connect to Ethereum node
-	client, err := ethclient.Dial(config.RPC.Endpoint)
+	client, err := util.NewEthClient(config.RPC.Endpoint)
 	if err != nil {
 		log.Fatalf("Failed to connect to Ethereum node: %v", err)
 	}
 	defer client.Close()
 
-	// Test the connection
-	chainID, err := client.ChainID(context.Background())
-	if err != nil {
-		log.Fatalf("Failed to get chain ID: %v", err)
-	}
-	fmt.Printf("Connected to chain ID: %s\n", chainID.String())
+	fmt.Printf("Connected to chain ID: %s\n", client.ChainID.String())
 
-	// Parse contract ABI
-	contractABI, err := abi.JSON(strings.NewReader(TokenClaimerABI))
+	// Create contract wrapper
+	contract, err := util.NewTokenClaimerContract(config.RPC.ContractAddress, client)
 	if err != nil {
-		log.Fatalf("Failed to parse contract ABI: %v", err)
+		log.Fatalf("Failed to create contract wrapper: %v", err)
 	}
 
-	// Contract address
-	contractAddr := common.HexToAddress(config.RPC.ContractAddress)
-	fmt.Printf("Testing contract at: %s\n\n", contractAddr.Hex())
+	fmt.Printf("Testing contract at: %s\n\n", contract.Address.Hex())
 
 	// Test contract's generation functions and get calculated data
-	contractRoot, localRoot, contractProofs, localProofs, leaves := runContractGenerationTest(client, contractABI, contractAddr, testCases)
+	contractRoot, localRoot, contractProofs, localProofs, leaves := runContractGenerationTest(contract, testCases)
 
 	// Use the calculated data for verification testing
-	runContractTest(client, contractABI, contractAddr, testCases, contractRoot, localRoot, contractProofs, localProofs, leaves)
+	runContractTest(contract, testCases, contractRoot, localRoot, contractProofs, localProofs, leaves)
 }
 
-func loadConfig(filename string) (*Config, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %v", err)
-	}
-
-	var config Config
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %v", err)
-	}
-
-	return &config, nil
-}
-
-func configToTestCases(config *Config) ([]TestCase, error) {
-	if len(config.TestData.Addresses) != len(config.TestData.Amounts) {
-		return nil, fmt.Errorf("addresses and amounts arrays must have the same length")
-	}
-
-	testCases := make([]TestCase, len(config.TestData.Addresses))
-	for i := range config.TestData.Addresses {
-		address := common.HexToAddress(config.TestData.Addresses[i])
-		amount, ok := new(big.Int).SetString(config.TestData.Amounts[i], 10)
-		if !ok {
-			return nil, fmt.Errorf("invalid amount at index %d: %s", i, config.TestData.Amounts[i])
-		}
-
-		testCases[i] = TestCase{
-			Name:    fmt.Sprintf("User_%d", i+1),
-			Address: address,
-			Amount:  amount,
-		}
-	}
-
-	return testCases, nil
-}
-
-func runContractGenerationTest(client *ethclient.Client, contractABI abi.ABI, contractAddr common.Address, testCases []TestCase) (common.Hash, common.Hash, [][]common.Hash, [][]common.Hash, []common.Hash) {
+func runContractGenerationTest(contract *util.TokenClaimerContract, testCases []util.TestCase) (common.Hash, common.Hash, [][]common.Hash, [][]common.Hash, []common.Hash) {
 	fmt.Println("\n=== STEP 3: Testing Contract Generation Functions ===")
-
-	// Prepare arrays for contract calls
-	addresses := make([]common.Address, len(testCases))
-	amounts := make([]*big.Int, len(testCases))
-	for i, testCase := range testCases {
-		addresses[i] = testCase.Address
-		amounts[i] = testCase.Amount
-	}
 
 	// Test generateMerkleRoot
 	fmt.Println("Testing generateMerkleRoot...")
-
-	// Pack the generateMerkleRoot call
-	rootData, err := contractABI.Pack("generateMerkleRoot", addresses, amounts)
-	if err != nil {
-		log.Printf("Failed to pack generateMerkleRoot call: %v", err)
-		return common.Hash{}, common.Hash{}, nil, nil, nil
-	}
-
-	// Call the contract
-	rootCallMsg := ethereum.CallMsg{
-		To:   &contractAddr,
-		Data: rootData,
-	}
-
-	rootResult, err := client.CallContract(context.Background(), rootCallMsg, nil)
+	contractRoot, err := contract.GenerateMerkleRoot(testCases)
 	if err != nil {
 		log.Printf("Failed to call generateMerkleRoot: %v", err)
 		return common.Hash{}, common.Hash{}, nil, nil, nil
 	}
 
-	// Unpack the result
-	var contractRoot common.Hash
-	err = contractABI.UnpackIntoInterface(&contractRoot, "generateMerkleRoot", rootResult)
+	// Generate our local merkle data for comparison
+	merkleData, err := util.GenerateLocalMerkleData(testCases)
 	if err != nil {
-		log.Printf("Failed to unpack generateMerkleRoot result: %v", err)
+		log.Printf("Failed to generate local merkle data: %v", err)
 		return common.Hash{}, common.Hash{}, nil, nil, nil
 	}
-
-	// Generate our local root for comparison
-	leaves := make([]common.Hash, len(testCases))
-	for i, testCase := range testCases {
-		leaves[i] = merkle.HashAddressAmount(testCase.Address, testCase.Amount)
-	}
-	tree, _ := merkle.NewMerkleTree(leaves)
-	localRoot := tree.GenerateRoot()
 
 	// Initialize proof arrays
 	contractProofs := make([][]common.Hash, len(testCases))
 	localProofs := make([][]common.Hash, len(testCases))
 
 	fmt.Printf("Contract Root: %s\n", contractRoot.Hex())
-	fmt.Printf("Local Root:    %s\n", localRoot.Hex())
+	fmt.Printf("Local Root:    %s\n", merkleData.Root.Hex())
 
-	if contractRoot == localRoot {
+	if contractRoot == merkleData.Root {
 		fmt.Printf("✅ Contract and local root generation match!\n")
 	} else {
 		fmt.Printf("❌ Contract and local root generation differ!\n")
@@ -292,35 +109,15 @@ func runContractGenerationTest(client *ethclient.Client, contractABI abi.ABI, co
 	for i, testCase := range testCases {
 		fmt.Printf("Testing generateProof for %s...\n", testCase.Name)
 
-		// Pack the generateProof call
-		proofData, err := contractABI.Pack("generateProof", addresses, amounts, testCase.Address)
-		if err != nil {
-			log.Printf("Failed to pack generateProof call for %s: %v", testCase.Name, err)
-			continue
-		}
-
-		// Call the contract
-		proofCallMsg := ethereum.CallMsg{
-			To:   &contractAddr,
-			Data: proofData,
-		}
-
-		proofResult, err := client.CallContract(context.Background(), proofCallMsg, nil)
+		// Get contract proof
+		contractProof, err := contract.GenerateProof(testCases, testCase.Address)
 		if err != nil {
 			log.Printf("Failed to call generateProof for %s: %v", testCase.Name, err)
 			continue
 		}
 
-		// Unpack the result
-		var contractProof []common.Hash
-		err = contractABI.UnpackIntoInterface(&contractProof, "generateProof", proofResult)
-		if err != nil {
-			log.Printf("Failed to unpack generateProof result for %s: %v", testCase.Name, err)
-			continue
-		}
-
 		// Generate our local proof for comparison
-		localProof, err := tree.GenerateProof(leaves[i])
+		localProof, err := merkleData.GenerateLocalProof(i)
 		if err != nil {
 			log.Printf("Failed to generate local proof for %s: %v", testCase.Name, err)
 			continue
@@ -369,10 +166,10 @@ func runContractGenerationTest(client *ethclient.Client, contractABI abi.ABI, co
 	}
 
 	// Return all calculated data for reuse
-	return contractRoot, localRoot, contractProofs, localProofs, leaves
+	return contractRoot, merkleData.Root, contractProofs, localProofs, merkleData.Leaves
 }
 
-func runContractTest(client *ethclient.Client, contractABI abi.ABI, contractAddr common.Address, testCases []TestCase, contractRoot common.Hash, localRoot common.Hash, contractProofs [][]common.Hash, localProofs [][]common.Hash, leaves []common.Hash) {
+func runContractTest(contract *util.TokenClaimerContract, testCases []util.TestCase, contractRoot common.Hash, localRoot common.Hash, contractProofs [][]common.Hash, localProofs [][]common.Hash, leaves []common.Hash) {
 	// Display the pre-calculated data
 	fmt.Println("=== STEP 1: Using Pre-calculated Data ===")
 	for i, testCase := range testCases {
@@ -390,30 +187,10 @@ func runContractTest(client *ethclient.Client, contractABI abi.ABI, contractAddr
 		// Use pre-calculated proof
 		proof := localProofs[i]
 
-		// Pack the function call
-		data, err := contractABI.Pack("verifyAddress", proof, localRoot, testCase.Address, testCase.Amount)
+		// Call contract verification
+		isValid, err := contract.VerifyAddress(proof, localRoot, testCase.Address, testCase.Amount)
 		if err != nil {
-			log.Printf("Failed to pack function call for %s: %v", testCase.Name, err)
-			continue
-		}
-
-		// Call the contract
-		callMsg := ethereum.CallMsg{
-			To:   &contractAddr,
-			Data: data,
-		}
-
-		result, err := client.CallContract(context.Background(), callMsg, nil)
-		if err != nil {
-			log.Printf("Failed to call contract for %s: %v", testCase.Name, err)
-			continue
-		}
-
-		// Unpack the result
-		var isValid bool
-		err = contractABI.UnpackIntoInterface(&isValid, "verifyAddress", result)
-		if err != nil {
-			log.Printf("Failed to unpack result for %s: %v", testCase.Name, err)
+			log.Printf("Failed to call contract verifyAddress for %s: %v", testCase.Name, err)
 			continue
 		}
 
@@ -440,3 +217,11 @@ func runContractTest(client *ethclient.Client, contractABI abi.ABI, contractAddr
 		fmt.Println()
 	}
 }
+
+// Uncomment the main function below and run this file directly to test:
+// go run examples/rpc_contract_tester.go
+/*
+func main() {
+	runContractTester()
+}
+*/
